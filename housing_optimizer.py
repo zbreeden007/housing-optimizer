@@ -50,8 +50,16 @@ class HousingOptimizer:
         """Add a building to the system"""
         self.buildings[building.id] = building
 
-    def optimize(self) -> bool:
-        """Run the main optimization algorithm"""
+    def optimize(self, parameters=None) -> bool:
+        """Run the main optimization algorithm with optional parameter controls"""
+        if parameters is None:
+            parameters = {
+                'gender_separation': True,
+                'leader_separation': True,
+                'church_grouping': True,
+                'room_capacity': True
+            }
+            
         # Create the optimization problem
         prob = LpProblem("Conference_Housing_Assignment", LpMinimize)
 
@@ -70,29 +78,48 @@ class HousingOptimizer:
         for p_id in self.people.keys():
             prob += lpSum(x[p_id, r] for r in self.rooms.keys()) == 1
 
-        # 2. Room capacity constraints
-        for r_id, room in self.rooms.items():
-            prob += lpSum(x[p_id, r_id] for p_id in self.people.keys()) <= room.capacity
+        # 2. Room capacity constraints (if enabled)
+        if parameters['room_capacity']:
+            for r_id, room in self.rooms.items():
+                prob += lpSum(x[p_id, r_id] for p_id in self.people.keys()) <= room.capacity
 
-        # 3. Gender separation constraints
-        for r_id in self.rooms.keys():
-            males = [p_id for p_id, p in self.people.items() if p.gender == 'M']
-            females = [p_id for p_id, p in self.people.items() if p.gender == 'F']
-            
-            # If there's anyone of one gender in a room, there can't be anyone of the other gender
-            for m in males:
-                for f in females:
-                    prob += x[m, r_id] + x[f, r_id] <= 1
+        # 3. Gender separation constraints (if enabled)
+        if parameters['gender_separation']:
+            for r_id in self.rooms.keys():
+                males = [p_id for p_id, p in self.people.items() if p.gender == 'M']
+                females = [p_id for p_id, p in self.people.items() if p.gender == 'F']
+                
+                # If there's anyone of one gender in a room, there can't be anyone of the other gender
+                for m in males:
+                    for f in females:
+                        prob += x[m, r_id] + x[f, r_id] <= 1
 
-        # 4. Leader/Student separation
-        for r_id in self.rooms.keys():
-            leaders = [p_id for p_id, p in self.people.items() if p.is_leader]
-            students = [p_id for p_id, p in self.people.items() if not p.is_leader]
-            
-            # If there's a leader in a room, there can't be any students
-            for l in leaders:
-                for s in students:
-                    prob += x[l, r_id] + x[s, r_id] <= 1
+        # 4. Leader/Student separation (if enabled)
+        if parameters['leader_separation']:
+            for r_id in self.rooms.keys():
+                leaders = [p_id for p_id, p in self.people.items() if p.is_leader]
+                students = [p_id for p_id, p in self.people.items() if not p.is_leader]
+                
+                # If there's a leader in a room, there can't be any students
+                for l in leaders:
+                    for s in students:
+                        prob += x[l, r_id] + x[s, r_id] <= 1
+
+        # 5. Church grouping preference (if enabled)
+        if parameters['church_grouping']:
+            # Add soft constraints to encourage same-church grouping
+            for church_id in set(p.church_id for p in self.people.values()):
+                church_members = [p_id for p_id, p in self.people.items() 
+                                if p.church_id == church_id]
+                # Try to keep church members in same or adjacent rooms
+                for building in self.buildings.values():
+                    for floor in range(1, building.floors + 1):
+                        floor_rooms = [r_id for r_id, r in self.rooms.items() 
+                                     if r.building_id == building.id and r.floor == floor]
+                        if floor_rooms:
+                            # Encourage at least some church members on each floor
+                            prob += lpSum(x[m, r] for m in church_members 
+                                       for r in floor_rooms) >= 1
 
         # Solve the problem
         status = prob.solve()
